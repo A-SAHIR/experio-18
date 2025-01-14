@@ -1,0 +1,128 @@
+version: '3.7'
+services:
+  postgres:
+    image: postgres:11
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/data/postgres:/var/lib/postgresql/data
+    command: postgres -c max_connections=${POSTGRES_MAX_CONNECTIONS}
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASS}
+      - POSTGRES_DB=postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.hostname == ${HOST_NAME}
+
+  pgbouncer:
+    image: myregistry.experioservices.com/pgbouncer:1.23.1
+    depends_on:
+      - postgres
+    networks:
+      - net
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASS}
+      - ADMIN_USERS=postgres,root
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  odoo:
+    image: myregistry.experioservices.com/experio:6.23-1-pool
+    depends_on:
+      - pgbouncer
+    networks:
+      - nginx-network
+      - net
+    ports:
+      - "${ODOO_PORT}:8069"
+    tty: true
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.hostname == ${HOST_NAME}
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/odoo.conf:/etc/odoo/odoo.conf
+      - /datadrive/datastore/${FOLDER_TAG}/data/odoo:/var/lib/odoo
+
+  cron:
+    image: myregistry.experioservices.com/experio:6.23.0-alpha
+    depends_on:
+      - pgbouncer
+    networks:
+      - nginx-network
+      - net
+    tty: true
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.hostname == ${HOST_NAME}
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/cron.conf:/etc/odoo/odoo.conf
+      - /datadrive/datastore/${FOLDER_TAG}/data/odoo:/var/lib/odoo
+
+  odoo-bot:
+    image: myregistry.experioservices.com/experio:6.22.30
+    command: python3 /mnt/scripts/azure_upgrade.py
+    depends_on:
+      - postgres
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASS=${POSTGRES_PASS}
+      - COMMAND=${COMMAND}
+      - MODULES=${MODULES}
+      - DBNAME=${DBNAME}
+      - OPTION=${OPTION}
+      - TIMEOUT=${TIMEOUT}
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/odoo.conf:/etc/odoo/odoo.conf
+    deploy:
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.hostname == ${HOST_NAME}
+
+  redis:
+    image: redis:6
+    command: redis-server /usr/local/etc/redis/redis.conf --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/data/redis:/data
+      - /datadrive/datastore/${FOLDER_TAG}/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - net
+
+networks:
+  nginx-network:
+    external: true
+  net:

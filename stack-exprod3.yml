@@ -1,0 +1,166 @@
+version: '3.7'
+services:
+  postgres:
+    image: postgres:11
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/postgres-11:/var/lib/postgresql/data
+    command: postgres -c max_connections=${POSTGRES_MAX_CONNECTIONS}
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASS}
+      - POSTGRES_DB=postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.type == database
+    ports:
+      - '5432:5432'
+
+  pgbouncer:
+    image: myregistry.experioservices.com/pgbouncer:1.23.1
+    depends_on:
+      - postgres
+    networks:
+      - net
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASS}
+      - ADMIN_USERS=postgres,root
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+      - /datadrive/datastore/${FOLDER_TAG}/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.type == database
+    ports:
+      - '6432:5432'
+
+  pgcleanup:
+    image: myregistry.experioservices.com/experio-pgcleanup:1.0
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/pgcleanup/pgcleanup.env:/cron/.env
+    depends_on:
+      - postgres
+      - pgbouncer
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.type == database
+
+  odoo:
+    image: myregistry.experioservices.com/experio:7.0.3
+    depends_on:
+      - pgbouncer
+      - redis
+    networks:
+      - nginx-network
+      - net
+    ports:
+      - "${ODOO_PORT}:8069"
+    tty: true
+    # command: -- --dev=xml
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/odoov7/odoo-worker.conf:/etc/odoo/odoo.conf
+      - /datadrive/datastore/${FOLDER_TAG}/odoov7/data:/var/lib/odoo
+    deploy:
+      replicas: 3
+#      resources:
+#        limits:
+#          memory: 15G    # Slightly higher than limit_memory_hard
+#        reservations:
+#          memory: 12G    # Slightly higher than limit_memory_soft
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.type == compute
+
+  cron:
+    image: myregistry.experioservices.com/experio:7.0.1
+    depends_on:
+      - pgbouncer
+    networks:
+      - nginx-network
+      - net
+    tty: true
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/odoov7/cron-worker.conf:/etc/odoo/odoo.conf
+      - /datadrive/datastore/${FOLDER_TAG}/odoov7/data:/var/lib/odoo
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.type == compute
+
+  odoo-bot:
+    image: myregistry.experioservices.com/experio:7.0.3
+    command: python3 /mnt/scripts/azure_upgrade.py
+    depends_on:
+      - pgbouncer
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASS=${POSTGRES_PASS}
+      - COMMAND=${COMMAND}
+      - MODULES=${MODULES}
+      - DBNAME=${DBNAME}
+      - OPTION=${OPTION}
+      - TIMEOUT=${TIMEOUT}
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/odoov7/odoo-worker.conf:/etc/odoo/odoo.conf
+    deploy:
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.labels.type == compute
+
+  redis:
+    image: redis:6
+    command: redis-server /usr/local/etc/redis/redis.conf --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/redis/data:/data
+      - /datadrive/datastore/${FOLDER_TAG}/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - net
+    deploy:
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.labels.type == compute
+
+networks:
+  nginx-network:
+    external: true
+  net:

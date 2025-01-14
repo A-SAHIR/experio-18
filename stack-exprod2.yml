@@ -1,0 +1,137 @@
+version: '3.7'
+services:
+  postgres:
+    image: postgres:11
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/data/postgres/pgdata:/var/lib/postgresql/data/pgdata
+      - /datadrive/datastore/${FOLDER_TAG}/data/postgres/config:/etc/postgresql
+    command: postgres -c max_connections=${POSTGRES_MAX_CONNECTIONS}
+    entrypoint: ["/var/lib/postgresql/data/pgdata/docker-entrypoint.sh"]
+#    entrypoint: ["/var/lib/postgresql/data/pgdata/postgres-startup.sh"]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASS}
+      - POSTGRES_DB=postgres
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - POSTGRES_LOG_LEVEL=debug5
+      - DBNAME_GLOBAL=cabinet_global
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.hostname == exprod2srv02
+#    healthcheck:
+#      test: [ "CMD", "pg_isready", "-q", "-d", "${POSTGRES_DB}", "-U", "${POSTGRES_USER}" ]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 5
+#      start_period: 60s
+
+  pgbouncer:
+    image: myregistry.experioservices.com/pgbouncer:1.23.1
+    depends_on:
+      - postgres
+    networks:
+      - net
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASS}
+      - ADMIN_USERS=postgres,root
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+      - /datadrive/datastore/${FOLDER_TAG}/userlist.txt:/etc/pgbouncer/userlist.txt
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  odoo:
+    image: myregistry.experioservices.com/experio:6.22.42
+    depends_on:
+      - pgbouncer
+      - redis
+    networks:
+      - nginx-network
+      - net
+    ports:
+      - "${ODOO_PORT}:8069"
+    tty: true
+    deploy:
+      replicas: 4
+      update_config:
+        parallelism: 2
+        delay: 5s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.labels.type == compute
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/odoo.conf:/etc/odoo/odoo.conf
+      - /datadrive/datastore/${FOLDER_TAG}/data/odoo:/var/lib/odoo
+
+  odoo-bot:
+    image: myregistry.experioservices.com/experio:6.22.42
+    command: python3 /mnt/scripts/azure_upgrade.py
+    depends_on:
+      - pgbouncer
+    environment:
+      - POSTGRES_HOST=pgbouncer
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASS=${POSTGRES_PASS}
+      - COMMAND=${COMMAND}
+      - MODULES=${MODULES}
+      - DBNAME=${DBNAME}
+      - OPTION=${OPTION}
+      - TIMEOUT=${TIMEOUT}
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/odoo.conf:/etc/odoo/odoo.conf
+    deploy:
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.labels.type == compute
+
+  cron:
+    image: myregistry.experioservices.com/experio-pgcleanup:1.0
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - net
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/pg-cleanup.env:/cron/.env
+    depends_on:
+      - postgres
+      - pgbouncer
+
+  redis:
+    image: redis:6
+    command: redis-server /usr/local/etc/redis/redis.conf --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - /datadrive/datastore/${FOLDER_TAG}/redis/data:/data
+      - /datadrive/datastore/${FOLDER_TAG}/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - net
+    deploy:
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.labels.type == compute
+
+networks:
+  nginx-network:
+    external: true
+  net:

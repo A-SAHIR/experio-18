@@ -1,0 +1,5 @@
+python-dotenv==0.21.1
+pexpect~=4.8.0
+pyopenssl==22.0.0
+cryptography==38.0.4  # incompatibility between pyopenssl 19.0.0 and cryptography>=37.0.0
+lxml==4.9.1 # min version = 4.5.0 (Focal - with security backports)

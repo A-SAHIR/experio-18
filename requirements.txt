@@ -1,0 +1,5 @@
+-r odoo/requirements.txt
+-r exp-base/requirements.txt
+-r exp-accounting/requirements.txt
+-r exp-cognitive/requirements.txt
+-r requirements.experio.txt
