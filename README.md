@@ -2,6 +2,7 @@
 
 ## 1. Installation
 
+https://www.odoo.com/documentation/18.0/administration/on_premise/source.html
 There are multiple ways to install experio depending on your OS:
 
 ### 1.1. docker-compose
